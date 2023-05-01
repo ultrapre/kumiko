@@ -417,10 +417,10 @@ class Kumiko:
 		for i, panel in enumerate(panels):
 			fpath,fname = os.path.split(filename)
 			base_name, ext = os.path.splitext(fname)
+			if not os.path.exists(fpath+'/data'):
+				os.makedirs(fpath+'/data')
 			try:
 				hull = cv.convexHull(panel.polygon)
-				if not os.path.exist(fpath+'/data'):
-					os.makedirs(fpath+'/data')
 				fn = fpath+'/data/%s_%s.png'%(base_name,str(i+1).zfill(2))
 				self.crop_img(hull,self.img,fn)
 				infs.append(np.squeeze(hull))
