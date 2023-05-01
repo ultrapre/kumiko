@@ -9,10 +9,57 @@ from functools import reduce
 from lib.panel import Panel
 from lib.debug import Debug
 
-
+import cv2
 
 class NotAnImageException (Exception):
 	pass
+
+
+
+from shapely.geometry import Point, Polygon
+
+def points_inside_polygon1(points, polygon):
+	"""
+	判断多个点是否在一个多边形内部
+	:param points: np.array, 多个点坐标
+	:param polygon: np.array, 多边形顶点坐标
+	:return: np.array, 布尔值数组，判断每个点是否在多边形内部
+	"""
+	poly = Polygon(polygon)
+	return np.array([Point(p).within(poly) for p in points])
+
+def points_inside_polygon(points, polygon):
+    """
+    判断多个点是否在一个多边形内部
+    :param points: np.array, 多个点坐标
+    :param polygon: np.array, 多边形顶点坐标
+    :return: np.array, 布尔值数组，判断每个点是否在多边形内部
+    """
+    poly = Polygon(polygon)
+    return np.array([Point(p).within(poly) for p in points])
+
+
+def hulls_inside_hull(hulls):
+	"""
+	找到一个凸包中包含在另一个凸包内部的所有凸包
+	:param hulls: List[np.array], 多个凸包的顶点坐标
+	:return: List[np.array], 在另一个凸包内部的所有凸包
+	"""
+	inside_hulls = []
+	for i, hull in enumerate(hulls):
+		inside = False
+		for j, other in enumerate(hulls):
+			if i == j:
+				continue
+			# 判断hull中的所有顶点是否都在other内部
+			if 1:
+				if all(points_inside_polygon(hull, other)):
+					inside = True
+					break
+		if inside:
+			inside_hulls.append(i)
+	return inside_hulls
+
 
 class Kumiko:
 	
@@ -272,6 +319,7 @@ class Kumiko:
 	
 	
 	def parse_image(self,filename,url=None):
+		print(filename)
 		self.img = cv.imread(filename)
 		if not isinstance(self.img,np.ndarray) or self.img.size == 0:
 			raise NotAnImageException('File {} is not an image'.format(filename))
@@ -330,37 +378,84 @@ class Kumiko:
 		self.dbg.add_image(self.img, 'Initial contours')
 		self.dbg.add_step('Panels from initial contours', panels)
 		
-		# Group small panels that are close together, into bigger ones
-		panels = self.group_small_panels(panels,filename)
+		# # 将相邻小的矩形区域合并成大的区域
+		# panels = self.group_small_panels(panels, filename)
 		
-		# See if panels can be cut into several (two non-consecutive points are close)
-		self.split_panels(panels)
+		# # 检查矩形区域是否可以被分成多个子区域
+		# self.split_panels(panels)
 		
-		# Merge panels that shouldn't have been split (speech bubble diving in a panel)
-		self.merge_panels(panels)
+		# # 合并不应该分开的矩形区域（例如漫画中的对话气泡）
+		# self.merge_panels(panels)
 		
-		# splitting polygons may result in panels slightly overlapping, de-overlap them
-		self.deoverlap_panels(panels)
+		# # 处理多个区域之间的重叠问题
+		# self.deoverlap_panels(panels)
 		
-		# re-filter out small panels
+		# 过滤掉面积太小的矩形区域
 		panels = list(filter(lambda p: not p.is_small(), panels))
 		self.dbg.add_step('Exclude small panels', panels)
 		
-		# get actual gutters before expanding panels
-		actual_gutters = Kumiko.actual_gutters(panels)
-		infos['gutters'] = [actual_gutters['x'],actual_gutters['y']]
+		# # 获取实际间隙，用于扩展矩形区域
+		# actual_gutters = Kumiko.actual_gutters(panels)
+		# infos['gutters'] = [actual_gutters['x'], actual_gutters['y']]
 		
-		panels.sort()  # TODO: remove when panels expansion is smarter
-		self.expand_panels(panels)
+		# # 将矩形区域进行扩展
+		# panels.sort()
+		# self.expand_panels(panels)
 		
+		# 如果没有检测到任何区域，则将整张图片设置为唯一的区域
 		if len(panels) == 0:
-			panels.append( Panel([0,0,infos['size'][0],infos['size'][1]]) );
+			panels.append(Panel([0, 0, infos['size'][0], infos['size'][1]]))
 		
-		# Number panels comics-wise (ltr/rtl)
+		# # 按照从左到右、从上到下的方式对区域进行编号
 		panels.sort()
 		
-		# Simplify panels back to lists (x,y,w,h)
-		panels = list(map(lambda p: p.to_xywh(), panels))
+		# # 将矩形区域转换为左上角坐标和宽高信息的列表形式
+		# panels = list(map(lambda p: p.to_xywh(), panels))
+
+		infs = []
+		infsn = []
+		for i, panel in enumerate(panels):
+			fpath,fname = os.path.split(filename)
+			base_name, ext = os.path.splitext(fname)
+			try:
+				hull = cv.convexHull(panel.polygon)
+				if not os.path.exist(fpath+'/data'):
+					os.makedirs(fpath+'/data')
+				fn = fpath+'/data/%s_%s.png'%(base_name,str(i+1).zfill(2))
+				self.crop_img(hull,self.img,fn)
+				infs.append(np.squeeze(hull))
+				infsn.append(fn)
+			except:
+				pass
 		
+		ilis = hulls_inside_hull(infs)
+		for i in ilis:
+			print('r '+infsn[i])
+			os.remove(infsn[i])
+
 		infos['panels'] = panels
 		return infos
+
+	
+	def crop_img(self,hull,img,output_filename = "subimage.png"):
+		# 计算 contour 的外接矩形
+		x,y,w,h = cv.boundingRect(hull)
+
+		# 创建一个全透明的图像，大小和原始图像一样
+		mask = np.zeros_like(img)
+
+		# hull = cv.convexHull(contour)
+		# print(hull)
+
+		# 在全透明图像上绘制轮廓
+		cv.drawContours(mask, [hull], 0, (255, 255, 255), thickness=-1)
+
+		# 从全透明图像上切出子图像
+		subimg = img[y:y+h, x:x+w]
+		submask = mask[y:y+h, x:x+w]
+
+		# 将子图像保存为背景透明的 PNG 文件
+		
+		output_img = np.zeros_like(subimg)
+		output_img[submask == 255] = subimg[submask == 255]
+		cv.imwrite(output_filename, output_img, [cv.IMWRITE_PNG_COMPRESSION, 9])
